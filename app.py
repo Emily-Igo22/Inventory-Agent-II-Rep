@@ -183,6 +183,11 @@ def run_streamlit():
     )
     override_val = None if model_override == "Auto-Detect" else model_override
 
+    # Sidebar: Data Upload Section (last section in sidebar)
+    st.sidebar.markdown("---")
+    st.sidebar.header("Data Upload")
+    uploaded_file = st.sidebar.file_uploader("Upload CSV File", type=["csv"])
+
     # Query Input
     user_query = st.text_area(
         "Enter your natural-language inventory question:",
@@ -226,6 +231,98 @@ def run_streamlit():
         # Executive Explanation
         st.subheader("3. Executive Managerial Explanation & Verification")
         st.markdown(resp.explanation)
+
+    # =========================================================================
+    # Uploaded CSV Data Processing & Analysis
+    # =========================================================================
+    if uploaded_file is not None:
+        st.markdown("---")
+        st.header("📊 Inventory Data Upload & Analysis")
+        try:
+            import pandas as pd
+            df = pd.read_csv(uploaded_file)
+
+            required_columns = ["Product", "Category", "Units", "Unit Cost"]
+            missing_columns = [col for col in required_columns if col not in df.columns]
+
+            if missing_columns:
+                st.error(
+                    f"⚠️ Uploaded CSV is missing required column(s): **{', '.join(missing_columns)}**. "
+                    f"Expected columns: {', '.join(required_columns)}."
+                )
+            else:
+                # Ensure numeric types for calculation columns
+                df["Units"] = pd.to_numeric(df["Units"], errors="coerce").fillna(0)
+                df["Unit Cost"] = pd.to_numeric(df["Unit Cost"], errors="coerce").fillna(0.0)
+
+                # 5. Create new calculated column: Inventory Value = Units × Unit Cost
+                df["Inventory Value"] = df["Units"] * df["Unit Cost"]
+
+                # 1. Total Units
+                total_units = int(df["Units"].sum())
+
+                # 2. Average Unit Cost
+                avg_unit_cost = float(df["Unit Cost"].mean()) if len(df) > 0 else 0.0
+
+                # 3. Product with highest Units
+                if len(df) > 0:
+                    max_unit_idx = df["Units"].idxmax()
+                    highest_product = str(df.loc[max_unit_idx, "Product"])
+                    highest_product_units = int(df.loc[max_unit_idx, "Units"])
+                else:
+                    highest_product = "N/A"
+                    highest_product_units = 0
+
+                # 4. Group data by Category and calculate total Units
+                units_by_category = (
+                    df.groupby("Category", as_index=False)["Units"]
+                    .sum()
+                    .sort_values(by="Units", ascending=False)
+                )
+
+                # 6. Total Inventory Value across all products
+                total_inventory_value = float(df["Inventory Value"].sum())
+
+                # Display Results: Summary Metrics Cards
+                st.subheader("Inventory Summary Metrics")
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Total Units", f"{total_units:,}")
+                m2.metric("Average Unit Cost", f"${avg_unit_cost:,.2f}")
+                m3.metric("Product with Highest Units", f"{highest_product} ({highest_product_units:,})")
+                m4.metric("Total Inventory Value", f"${total_inventory_value:,.2f}")
+
+                # Display Dataset Information: rows, columns, column names
+                st.subheader("Dataset Information")
+                st.write(f"- **Number of Rows**: {df.shape[0]:,}")
+                st.write(f"- **Number of Columns**: {df.shape[1]:,}")
+                st.write(f"- **Column Names**: {', '.join(df.columns.tolist())}")
+
+                # Display Total Units by Category
+                st.subheader("Total Units by Category")
+                st.dataframe(
+                    units_by_category,
+                    use_container_width=True,
+                    column_config={
+                        "Category": "Category",
+                        "Units": st.column_config.NumberColumn("Total Units", format="%d"),
+                    },
+                )
+
+                # Display the uploaded dataframe including the new Inventory Value column with currency formatting
+                st.subheader("Uploaded Data Table (with Calculated Inventory Value)")
+                st.dataframe(
+                    df,
+                    use_container_width=True,
+                    column_config={
+                        "Product": "Product",
+                        "Category": "Category",
+                        "Units": st.column_config.NumberColumn("Units", format="%d"),
+                        "Unit Cost": st.column_config.NumberColumn("Unit Cost", format="$%.2f"),
+                        "Inventory Value": st.column_config.NumberColumn("Inventory Value", format="$%.2f"),
+                    },
+                )
+        except Exception as err:
+            st.error(f"Error processing CSV file: {err}")
 
 
 # =============================================================================
