@@ -237,51 +237,186 @@ def run_streamlit():
     # =========================================================================
     if uploaded_file is not None:
         st.markdown("---")
-        st.header("📊 Inventory Data Upload & Analysis")
         try:
             import pandas as pd
+            from inventory_tools import calculate_multicriteria_classification
+
             df = pd.read_csv(uploaded_file)
 
-            required_columns = ["Product", "Category", "Units", "Unit Cost"]
-            missing_columns = [col for col in required_columns if col not in df.columns]
+            # Check for Classification schema
+            col_map = {c.strip().lower(): c for c in df.columns}
+            has_sales = any(k in col_map for k in ["sales ($)", "sales", "revenue", "sales_usd", "total sales"])
+            has_hits = any(k in col_map for k in ["hits", "hit", "picks", "transactions", "order lines"])
+            is_classification_csv = has_sales and has_hits
 
-            if missing_columns:
+            # Check for Units & Unit Cost analysis schema
+            units_required = ["Product", "Category", "Units", "Unit Cost"]
+            is_units_analysis_csv = all(col in df.columns for col in units_required)
+
+            # If neither schema matches, show clear guidance
+            if not is_classification_csv and not is_units_analysis_csv:
                 st.error(
-                    f"⚠️ Uploaded CSV is missing required column(s): **{', '.join(missing_columns)}**. "
-                    f"Expected columns: {', '.join(required_columns)}."
+                    "⚠️ Uploaded CSV does not match a supported inventory schema.\n\n"
+                    "- **For Multicriteria Inventory Classification**, expected columns: "
+                    "`Item Number`, `Item Name`, `UoM`, `Sales ($)`, `Hits`\n"
+                    "- **For Product Units & Cost Analysis**, expected columns: "
+                    "`Product`, `Category`, `Units`, `Unit Cost`"
                 )
-            else:
+
+            # -----------------------------------------------------------------
+            # 1. Multicriteria Inventory Classification (A, B, C, D)
+            # -----------------------------------------------------------------
+            if is_classification_csv:
+                st.header("🏷️ Multicriteria Inventory Classification (A, B, C, D)")
+                st.markdown(
+                    "Classifies catalog items using two critical operational dimensions: "
+                    "**Sales ($)** (financial impact / revenue) and **Hits** (warehouse picking velocity / order frequency)."
+                )
+
+                # Classification Method Selector
+                c_method_col1, c_method_col2 = st.columns([2, 1])
+                with c_method_col1:
+                    method_selection = st.radio(
+                        "Classification Methodology:",
+                        options=[
+                            "Cross-Criteria Matrix (Sales ABC × Hits ABC)",
+                            "Composite Percentile Score (Weighted 50% Sales / 50% Hits)",
+                        ],
+                        horizontal=True,
+                    )
+                chosen_method = "composite" if "Composite" in method_selection else "matrix"
+
+                # Perform multicriteria classification
+                class_res = calculate_multicriteria_classification(df, method=chosen_method)
+                classified_df = class_res["classified_df"]
+                breakdown = class_res["class_breakdown"]
+                results_summary = class_res["results"]
+
+                # Executive Metric Cards for A, B, C, D
+                st.subheader("Classification Summary by Class Tier")
+                col_a, col_b, col_c, col_d = st.columns(4)
+                col_a.metric(
+                    "Class A (Vital Fast-Movers)",
+                    f"{breakdown['A']['count']} items",
+                    f"{breakdown['A']['percent_items']}% catalog | {breakdown['A']['percent_sales']}% sales",
+                )
+                col_b.metric(
+                    "Class B (High Value / Moderate)",
+                    f"{breakdown['B']['count']} items",
+                    f"{breakdown['B']['percent_items']}% catalog | {breakdown['B']['percent_sales']}% sales",
+                )
+                col_c.metric(
+                    "Class C (Routine Commodities)",
+                    f"{breakdown['C']['count']} items",
+                    f"{breakdown['C']['percent_items']}% catalog | {breakdown['C']['percent_sales']}% sales",
+                )
+                col_d.metric(
+                    "Class D (Slow-Moving Tail)",
+                    f"{breakdown['D']['count']} items",
+                    f"{breakdown['D']['percent_items']}% catalog | {breakdown['D']['percent_sales']}% sales",
+                )
+
+                # Total catalog summary metrics
+                tot_col1, tot_col2, tot_col3, tot_col4 = st.columns(4)
+                tot_col1.metric("Total Catalog SKUs", f"{results_summary['total_items']:,}")
+                tot_col2.metric("Total Catalog Sales", f"${results_summary['total_sales']:,.2f}")
+                tot_col3.metric("Total Warehouse Hits", f"{results_summary['total_hits']:,}")
+                tot_col4.metric("Applied Strategy", chosen_method.title())
+
+                # Distribution Breakdown Table
+                st.subheader("Multicriteria Breakdown & Control Strategy")
+                breakdown_table_data = []
+                for c_name in ["A", "B", "C", "D"]:
+                    b = breakdown[c_name]
+                    breakdown_table_data.append({
+                        "Class": f"Class {c_name}",
+                        "SKU Count": b["count"],
+                        "SKU %": f"{b['percent_items']}%",
+                        "Total Sales ($)": b["total_sales"],
+                        "Sales %": f"{b['percent_sales']}%",
+                        "Total Hits": b["total_hits"],
+                        "Hits %": f"{b['percent_hits']}%",
+                        "Recommended Management Strategy": b["strategy"],
+                    })
+                st.dataframe(
+                    pd.DataFrame(breakdown_table_data),
+                    use_container_width=True,
+                    column_config={
+                        "Total Sales ($)": st.column_config.NumberColumn("Total Sales ($)", format="$%.2f"),
+                        "Total Hits": st.column_config.NumberColumn("Total Hits", format="%d"),
+                    },
+                    hide_index=True,
+                )
+
+                # Enriched Data Table with Classification Results
+                st.subheader("Classified Inventory Catalog")
+                # Detect exact column names used
+                sales_col_used = class_res["inputs_extracted"]["sales_column"]
+                hits_col_used = class_res["inputs_extracted"]["hits_column"]
+
+                col_config = {
+                    sales_col_used: st.column_config.NumberColumn(sales_col_used, format="$%.2f"),
+                    hits_col_used: st.column_config.NumberColumn(hits_col_used, format="%d"),
+                    "Composite Score": st.column_config.NumberColumn("Composite Score", format="%.2f"),
+                    "Classification": st.column_config.TextColumn("Classification (A/B/C/D)"),
+                }
+                st.dataframe(
+                    classified_df,
+                    use_container_width=True,
+                    column_config=col_config,
+                )
+
+                # Technical & Verification Details Expander
+                with st.expander("🔍 Verification Checks & Mathematical Formulations"):
+                    v_col1, v_col2 = st.columns(2)
+                    with v_col1:
+                        st.markdown("**Formulas Applied:**")
+                        for f in class_res["formula"]:
+                            st.markdown(f"- `{f}`")
+                    with v_col2:
+                        st.markdown("**Deterministic Verification Checks:**")
+                        for chk in class_res["verification_checks"]:
+                            badge = "✅" if chk["status"] == "PASSED" else "❌"
+                            st.markdown(f"- {badge} {chk['check']}: **{chk['status']}**")
+
+            # -----------------------------------------------------------------
+            # 2. Product Units & Cost Analysis (Existing Capability Maintained)
+            # -----------------------------------------------------------------
+            if is_units_analysis_csv:
+                st.header("📊 Inventory Data Upload & Analysis")
+
                 # Ensure numeric types for calculation columns
-                df["Units"] = pd.to_numeric(df["Units"], errors="coerce").fillna(0)
-                df["Unit Cost"] = pd.to_numeric(df["Unit Cost"], errors="coerce").fillna(0.0)
+                df_units = df.copy()
+                df_units["Units"] = pd.to_numeric(df_units["Units"], errors="coerce").fillna(0)
+                df_units["Unit Cost"] = pd.to_numeric(df_units["Unit Cost"], errors="coerce").fillna(0.0)
 
                 # 5. Create new calculated column: Inventory Value = Units × Unit Cost
-                df["Inventory Value"] = df["Units"] * df["Unit Cost"]
+                df_units["Inventory Value"] = df_units["Units"] * df_units["Unit Cost"]
 
                 # 1. Total Units
-                total_units = int(df["Units"].sum())
+                total_units = int(df_units["Units"].sum())
 
                 # 2. Average Unit Cost
-                avg_unit_cost = float(df["Unit Cost"].mean()) if len(df) > 0 else 0.0
+                avg_unit_cost = float(df_units["Unit Cost"].mean()) if len(df_units) > 0 else 0.0
 
                 # 3. Product with highest Units
-                if len(df) > 0:
-                    max_unit_idx = df["Units"].idxmax()
-                    highest_product = str(df.loc[max_unit_idx, "Product"])
-                    highest_product_units = int(df.loc[max_unit_idx, "Units"])
+                if len(df_units) > 0:
+                    max_unit_idx = df_units["Units"].idxmax()
+                    highest_product = str(df_units.loc[max_unit_idx, "Product"])
+                    highest_product_units = int(df_units.loc[max_unit_idx, "Units"])
                 else:
                     highest_product = "N/A"
                     highest_product_units = 0
 
                 # 4. Group data by Category and calculate total Units
                 units_by_category = (
-                    df.groupby("Category", as_index=False)["Units"]
+                    df_units.groupby("Category", as_index=False)["Units"]
                     .sum()
                     .sort_values(by="Units", ascending=False)
                 )
 
                 # 6. Total Inventory Value across all products
-                total_inventory_value = float(df["Inventory Value"].sum())
+                total_inventory_value = float(df_units["Inventory Value"].sum())
 
                 # Display Results: Summary Metrics Cards
                 st.subheader("Inventory Summary Metrics")
@@ -293,9 +428,9 @@ def run_streamlit():
 
                 # Display Dataset Information: rows, columns, column names
                 st.subheader("Dataset Information")
-                st.write(f"- **Number of Rows**: {df.shape[0]:,}")
-                st.write(f"- **Number of Columns**: {df.shape[1]:,}")
-                st.write(f"- **Column Names**: {', '.join(df.columns.tolist())}")
+                st.write(f"- **Number of Rows**: {df_units.shape[0]:,}")
+                st.write(f"- **Number of Columns**: {df_units.shape[1]:,}")
+                st.write(f"- **Column Names**: {', '.join(df_units.columns.tolist())}")
 
                 # Display Total Units by Category
                 st.subheader("Total Units by Category")
@@ -311,7 +446,7 @@ def run_streamlit():
                 # Display the uploaded dataframe including the new Inventory Value column with currency formatting
                 st.subheader("Uploaded Data Table (with Calculated Inventory Value)")
                 st.dataframe(
-                    df,
+                    df_units,
                     use_container_width=True,
                     column_config={
                         "Product": "Product",
@@ -321,6 +456,7 @@ def run_streamlit():
                         "Inventory Value": st.column_config.NumberColumn("Inventory Value", format="$%.2f"),
                     },
                 )
+
         except Exception as err:
             st.error(f"Error processing CSV file: {err}")
 
