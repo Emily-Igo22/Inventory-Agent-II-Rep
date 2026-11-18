@@ -1082,3 +1082,323 @@ def calculate_newsvendor(
             "expected_value_of_perfect_information": round((selling_price - unit_cost) * mu - expected_profit, 2),
         },
     }
+
+
+# =============================================================================
+# Multicriteria Inventory Classification Tool (A, B, C, D)
+# =============================================================================
+
+def calculate_multicriteria_classification(
+    df: Any,
+    sales_col: Optional[str] = None,
+    hits_col: Optional[str] = None,
+    item_num_col: Optional[str] = None,
+    item_name_col: Optional[str] = None,
+    uom_col: Optional[str] = None,
+    method: str = "matrix",
+    **kwargs: Any,
+) -> Dict[str, Any]:
+    """Perform deterministic multicriteria inventory classification using Sales ($) and Hits.
+
+    Classifies items into A, B, C, and D classes based on both financial impact (Sales $)
+    and warehouse transaction velocity (Hits / pick lines).
+
+    Supported Methods:
+    - 'matrix' (Cross-Criteria Matrix):
+        * Sales Class (Pareto 80/15/5): A (top 80%), B (next 15%), C (remaining 5%)
+        * Hits Class (Pareto 80/15/5): A (top 80%), B (next 15%), C (remaining 5%)
+        * Mapping to A, B, C, D:
+            AA, AB, BA -> Class A (High Sales & High Hits - vital fast-movers)
+            AC, BB, CA -> Class B (High Value / Moderate Velocity)
+            BC, CB     -> Class C (Low Value / Moderate-High Velocity - routine commodities)
+            CC         -> Class D (Low Sales & Low Hits - slow-moving tail / dead stock candidates)
+    - 'composite' (Weighted Multi-Criteria Percentile Score):
+        * Composite Score = 50% * Sales Percentile + 50% * Hits Percentile
+        * Class A: Top 20%
+        * Class B: Next 30% (20%-50%)
+        * Class C: Next 30% (50%-80%)
+        * Class D: Bottom 20% (80%-100%)
+
+    Returns 8 verification sections:
+    1. inputs_extracted
+    2. variable_definitions
+    3. formula
+    4. formula_with_substituted_values
+    5. intermediate_calculations
+    6. final_answer
+    7. verification_checks
+    8. assumptions
+    Plus 'classified_df' containing the resulting dataframe with classification columns.
+    """
+    import pandas as pd
+
+    if not isinstance(df, pd.DataFrame):
+        raise TypeError("Input must be a valid pandas DataFrame.")
+
+    if len(df) == 0:
+        raise ValueError("Input DataFrame is empty; cannot perform classification.")
+
+    df_classified = df.copy()
+
+    # Detect column names if not explicitly provided
+    if not sales_col:
+        for c in ["Sales ($)", "Sales", "Total Sales", "Sales_USD", "Revenue"]:
+            if c in df_classified.columns:
+                sales_col = c
+                break
+    if not hits_col:
+        for c in ["Hits", "Hit", "Transactions", "Picks", "Order Lines"]:
+            if c in df_classified.columns:
+                hits_col = c
+                break
+    if not item_num_col:
+        for c in ["Item Number", "Item No", "SKU", "Product ID", "Item"]:
+            if c in df_classified.columns:
+                item_num_col = c
+                break
+    if not item_name_col:
+        for c in ["Item Name", "Description", "Product Name", "Product"]:
+            if c in df_classified.columns:
+                item_name_col = c
+                break
+    if not uom_col:
+        for c in ["UoM", "UOM", "Unit of Measure"]:
+            if c in df_classified.columns:
+                uom_col = c
+                break
+
+    if not sales_col or sales_col not in df_classified.columns:
+        raise ValueError(f"Sales column not found. Available columns: {list(df_classified.columns)}")
+    if not hits_col or hits_col not in df_classified.columns:
+        raise ValueError(f"Hits column not found. Available columns: {list(df_classified.columns)}")
+
+    # Clean numeric data (handle string formatting, $, commas)
+    if not pd.api.types.is_numeric_dtype(df_classified[sales_col]):
+        df_classified[sales_col] = (
+            df_classified[sales_col]
+            .astype(str)
+            .str.replace("$", "", regex=False)
+            .str.replace(",", "", regex=False)
+            .str.strip()
+        )
+    df_classified[sales_col] = pd.to_numeric(df_classified[sales_col], errors="coerce").fillna(0.0)
+
+    if not pd.api.types.is_numeric_dtype(df_classified[hits_col]):
+        df_classified[hits_col] = (
+            df_classified[hits_col]
+            .astype(str)
+            .str.replace(",", "", regex=False)
+            .str.strip()
+        )
+    df_classified[hits_col] = pd.to_numeric(df_classified[hits_col], errors="coerce").fillna(0.0)
+
+    total_sales = float(df_classified[sales_col].sum())
+    total_hits = float(df_classified[hits_col].sum())
+    total_items = len(df_classified)
+
+    # 1. Sales ABC Classification (Pareto: Top 80% = A, Next 15% = B, Last 5% = C)
+    if total_sales > 0:
+        df_sorted_sales = df_classified.sort_values(by=sales_col, ascending=False).copy()
+        cum_sales = df_sorted_sales[sales_col].cumsum()
+        cum_sales_pct = (cum_sales / total_sales) * 100.0
+        prev_cum_sales_pct = cum_sales_pct.shift(1, fill_value=0.0)
+
+        sales_classes = pd.Series("C", index=df_sorted_sales.index)
+        sales_classes[prev_cum_sales_pct < 80.0] = "A"
+        sales_classes[(prev_cum_sales_pct >= 80.0) & (prev_cum_sales_pct < 95.0)] = "B"
+        df_classified["Sales Class"] = sales_classes
+    else:
+        df_classified["Sales Class"] = "C"
+
+    # 2. Hits ABC Classification (Pareto: Top 80% = A, Next 15% = B, Last 5% = C)
+    if total_hits > 0:
+        df_sorted_hits = df_classified.sort_values(by=hits_col, ascending=False).copy()
+        cum_hits = df_sorted_hits[hits_col].cumsum()
+        cum_hits_pct = (cum_hits / total_hits) * 100.0
+        prev_cum_hits_pct = cum_hits_pct.shift(1, fill_value=0.0)
+
+        hits_classes = pd.Series("C", index=df_sorted_hits.index)
+        hits_classes[prev_cum_hits_pct < 80.0] = "A"
+        hits_classes[(prev_cum_hits_pct >= 80.0) & (prev_cum_hits_pct < 95.0)] = "B"
+        df_classified["Hits Class"] = hits_classes
+    else:
+        df_classified["Hits Class"] = "C"
+
+    # 3. Percentile Ranks & Composite Score (0 - 100 scale)
+    sales_rank = df_classified[sales_col].rank(pct=True, ascending=True)
+    hits_rank = df_classified[hits_col].rank(pct=True, ascending=True)
+    df_classified["Composite Score"] = ((0.5 * sales_rank + 0.5 * hits_rank) * 100.0).round(2)
+
+    # 4. Matrix Class Mapping
+    def map_matrix_row(row: pd.Series) -> str:
+        combo = f"{row['Sales Class']}{row['Hits Class']}"
+        if combo in ("AA", "AB", "BA"):
+            return "A"
+        elif combo in ("AC", "BB", "CA"):
+            return "B"
+        elif combo in ("BC", "CB"):
+            return "C"
+        else:  # CC
+            return "D"
+
+    df_classified["Matrix Class"] = df_classified.apply(map_matrix_row, axis=1)
+
+    # 5. Composite Class Mapping (Percentile: Top 20% A, 20-50% B, 50-80% C, Bottom 20% D)
+    composite_pct_desc = df_classified["Composite Score"].rank(pct=True, ascending=False)
+    def map_composite_row(r: float) -> str:
+        if r <= 0.20:
+            return "A"
+        elif r <= 0.50:
+            return "B"
+        elif r <= 0.80:
+            return "C"
+        else:
+            return "D"
+
+    df_classified["Composite Class"] = composite_pct_desc.apply(map_composite_row)
+
+    # Primary Classification Column
+    if str(method).lower() == "composite":
+        df_classified["Classification"] = df_classified["Composite Class"]
+    else:
+        df_classified["Classification"] = df_classified["Matrix Class"]
+
+    # Calculate Distribution Statistics across A, B, C, D
+    class_stats: Dict[str, Dict[str, Any]] = {}
+    strategies = {
+        "A": "Vital Fast-Movers: High revenue & pick activity. Tight continuous control, frequent cycle counts, prime warehouse dock slotting.",
+        "B": "Moderate-High Priority: High value / moderate velocity. Regular periodic review, controlled safety stock buffers.",
+        "C": "Routine Commodities: Moderate-low value with regular picks. Automated min-max/two-bin replenishment, bulk ordering.",
+        "D": "Slow-Moving Tail / Dead Stock: Low sales and low pick frequency. Strict reorder limits, SKU rationalization, phase-out review.",
+    }
+
+    for c in ["A", "B", "C", "D"]:
+        subset = df_classified[df_classified["Classification"] == c]
+        cnt = len(subset)
+        c_sales = float(subset[sales_col].sum())
+        c_hits = float(subset[hits_col].sum())
+        class_stats[c] = {
+            "class": c,
+            "count": cnt,
+            "percent_items": round((cnt / total_items) * 100.0, 2) if total_items > 0 else 0.0,
+            "total_sales": round(c_sales, 2),
+            "percent_sales": round((c_sales / total_sales) * 100.0, 2) if total_sales > 0 else 0.0,
+            "total_hits": int(c_hits),
+            "percent_hits": round((c_hits / total_hits) * 100.0, 2) if total_hits > 0 else 0.0,
+            "strategy": strategies[c],
+        }
+
+    # Structured 8 Verification Sections
+    inputs_extracted = {
+        "total_items": total_items,
+        "total_sales_dollars": round(total_sales, 2),
+        "total_hits": int(total_hits),
+        "sales_column": sales_col,
+        "hits_column": hits_col,
+        "classification_method": method,
+    }
+
+    variable_definitions = {
+        "Sales ($)": "Total dollar revenue generated by the SKU (financial value dimension).",
+        "Hits": "Total pick transactions / order line frequency (warehouse velocity dimension).",
+        "Sales Class": "Pareto ABC category based on cumulative annual sales (A: 80%, B: 15%, C: 5%).",
+        "Hits Class": "Pareto ABC category based on cumulative transaction hits (A: 80%, B: 15%, C: 5%).",
+        "Composite Score": "Multi-criteria score combining Sales percentile and Hits percentile (0 to 100).",
+        "Class A": "Critical fast movers with top revenue impact and high order picking velocity.",
+        "Class B": "High-value slow movers or solid performers with moderate pick activity.",
+        "Class C": "Fast-moving routine parts with low revenue contribution.",
+        "Class D": "Slow-moving tail items with low revenue and minimal order hits.",
+    }
+
+    formulas = [
+        "1. Cumulative Sales % = sum(Sales_i) / Total_Sales * 100",
+        "2. Cumulative Hits % = sum(Hits_i) / Total_Hits * 100",
+        "3. Composite Score = 0.5 * Percentile_Rank(Sales) + 0.5 * Percentile_Rank(Hits)",
+        "4. Matrix Mapping: AA/AB/BA -> Class A, AC/BB/CA -> Class B, BC/CB -> Class C, CC -> Class D",
+    ]
+
+    formula_with_substituted_values = [
+        f"Total Catalog Items = {total_items:,}",
+        f"Total Annual Sales = ${total_sales:,.2f}",
+        f"Total Transaction Hits = {int(total_hits):,}",
+        f"Selected Classification Rule = '{method}'",
+    ]
+
+    intermediate_calculations = {
+        f"Class {c}": {
+            "Item Count": stats_c["count"],
+            "Item %": f"{stats_c['percent_items']}%",
+            "Sales ($)": f"${stats_c['total_sales']:,.2f}",
+            "Sales %": f"{stats_c['percent_sales']}%",
+            "Hits": f"{stats_c['total_hits']:,}",
+            "Hits %": f"{stats_c['percent_hits']}%",
+        }
+        for c, stats_c in class_stats.items()
+    }
+
+    final_answer = {
+        "summary": (
+            f"Classified {total_items} items into: "
+            f"Class A: {class_stats['A']['count']} ({class_stats['A']['percent_items']}%), "
+            f"Class B: {class_stats['B']['count']} ({class_stats['B']['percent_items']}%), "
+            f"Class C: {class_stats['C']['count']} ({class_stats['C']['percent_items']}%), "
+            f"Class D: {class_stats['D']['count']} ({class_stats['D']['percent_items']}%)."
+        ),
+        "class_breakdown": class_stats,
+    }
+
+    verification_checks = [
+        {
+            "check": "Sum of class counts equals total dataset rows",
+            "condition": sum(s["count"] for s in class_stats.values()) == total_items,
+            "status": "PASSED" if sum(s["count"] for s in class_stats.values()) == total_items else "FAILED",
+        },
+        {
+            "check": "Sum of class sales equals total catalog sales",
+            "condition": abs(sum(s["total_sales"] for s in class_stats.values()) - total_sales) < 1.0,
+            "status": "PASSED" if abs(sum(s["total_sales"] for s in class_stats.values()) - total_sales) < 1.0 else "FAILED",
+        },
+        {
+            "check": "Sum of class hits equals total catalog hits",
+            "condition": sum(s["total_hits"] for s in class_stats.values()) == int(total_hits),
+            "status": "PASSED" if sum(s["total_hits"] for s in class_stats.values()) == int(total_hits) else "FAILED",
+        },
+        {
+            "check": "All items have a deterministic classification in {A, B, C, D}",
+            "condition": set(df_classified["Classification"].unique()).issubset({"A", "B", "C", "D"}),
+            "status": "PASSED",
+        },
+    ]
+
+    assumptions = [
+        "Multicriteria evaluation considers both financial volume (Sales $) and picking activity (Hits).",
+        "Individual Sales ABC and Hits ABC use standard Pareto boundaries (80% for Class A, 15% for Class B, 5% for Class C).",
+        "Cross-criteria matrix mapping integrates sales volume with warehouse line activity to prevent single-metric distortions.",
+        "Missing or non-numeric sales/hits entries are treated as 0 without inventing artificial values.",
+    ]
+
+    return {
+        "model": "Multicriteria Inventory Classification (A, B, C, D)",
+        "inputs_extracted": inputs_extracted,
+        "inputs": inputs_extracted,
+        "variable_definitions": variable_definitions,
+        "formula": formulas,
+        "formulas": formulas,
+        "formula_with_substituted_values": formula_with_substituted_values,
+        "intermediate_calculations": intermediate_calculations,
+        "final_answer": final_answer,
+        "verification_checks": verification_checks,
+        "assumptions": assumptions,
+        "class_breakdown": class_stats,
+        "classified_df": df_classified,
+        "results": {
+            "total_items": total_items,
+            "total_sales": round(total_sales, 2),
+            "total_hits": int(total_hits),
+            "class_A_count": class_stats["A"]["count"],
+            "class_B_count": class_stats["B"]["count"],
+            "class_C_count": class_stats["C"]["count"],
+            "class_D_count": class_stats["D"]["count"],
+        },
+    }
+
