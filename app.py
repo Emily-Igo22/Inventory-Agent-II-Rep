@@ -298,22 +298,46 @@ def run_streamlit():
                 col_a.metric(
                     "Class A (Vital Fast-Movers)",
                     f"{breakdown['A']['count']} items",
-                    f"{breakdown['A']['percent_items']}% catalog | {breakdown['A']['percent_sales']}% sales",
+                    f"{breakdown['A']['percent_items']}% catalog",
                 )
                 col_b.metric(
                     "Class B (High Value / Moderate)",
                     f"{breakdown['B']['count']} items",
-                    f"{breakdown['B']['percent_items']}% catalog | {breakdown['B']['percent_sales']}% sales",
+                    f"{breakdown['B']['percent_items']}% catalog",
                 )
                 col_c.metric(
                     "Class C (Routine Commodities)",
                     f"{breakdown['C']['count']} items",
-                    f"{breakdown['C']['percent_items']}% catalog | {breakdown['C']['percent_sales']}% sales",
+                    f"{breakdown['C']['percent_items']}% catalog",
                 )
                 col_d.metric(
                     "Class D (Slow-Moving Tail)",
                     f"{breakdown['D']['count']} items",
-                    f"{breakdown['D']['percent_items']}% catalog | {breakdown['D']['percent_sales']}% sales",
+                    f"{breakdown['D']['percent_items']}% catalog",
+                )
+
+                # Total Sales for A, B, C, and D Classes
+                st.subheader("💰 Total Sales for A, B, C, and D Classes")
+                s_col_a, s_col_b, s_col_c, s_col_d = st.columns(4)
+                s_col_a.metric(
+                    "Class A Total Sales",
+                    f"${breakdown['A']['total_sales']:,.2f}",
+                    f"{breakdown['A']['percent_sales']}% of catalog sales",
+                )
+                s_col_b.metric(
+                    "Class B Total Sales",
+                    f"${breakdown['B']['total_sales']:,.2f}",
+                    f"{breakdown['B']['percent_sales']}% of catalog sales",
+                )
+                s_col_c.metric(
+                    "Class C Total Sales",
+                    f"${breakdown['C']['total_sales']:,.2f}",
+                    f"{breakdown['C']['percent_sales']}% of catalog sales",
+                )
+                s_col_d.metric(
+                    "Class D Total Sales",
+                    f"${breakdown['D']['total_sales']:,.2f}",
+                    f"{breakdown['D']['percent_sales']}% of catalog sales",
                 )
 
                 # Total catalog summary metrics
@@ -322,6 +346,39 @@ def run_streamlit():
                 tot_col2.metric("Total Catalog Sales", f"${results_summary['total_sales']:,.2f}")
                 tot_col3.metric("Total Warehouse Hits", f"{results_summary['total_hits']:,}")
                 tot_col4.metric("Applied Strategy", chosen_method.title())
+
+                # Top 5 Items by Sales for A, B, C, and D Classes
+                st.subheader("🏆 Top 5 Items by Sales for A, B, C, and D Classes")
+                sales_col_used = class_res["inputs_extracted"]["sales_column"]
+                hits_col_used = class_res["inputs_extracted"]["hits_column"]
+                top_5_data = class_res.get("top_5_by_class", {})
+
+                tab_a, tab_b, tab_c, tab_d = st.tabs([
+                    f"Class A Top 5 (${breakdown['A']['total_sales']:,.2f})",
+                    f"Class B Top 5 (${breakdown['B']['total_sales']:,.2f})",
+                    f"Class C Top 5 (${breakdown['C']['total_sales']:,.2f})",
+                    f"Class D Top 5 (${breakdown['D']['total_sales']:,.2f})",
+                ])
+                for tab, c_name in zip([tab_a, tab_b, tab_c, tab_d], ["A", "B", "C", "D"]):
+                    with tab:
+                        c_items = top_5_data.get(c_name, [])
+                        if c_items:
+                            st.markdown(
+                                f"**Top 5 Revenue Items in Class {c_name}** "
+                                f"— Total Class Sales: **${breakdown[c_name]['total_sales']:,.2f}** "
+                                f"({breakdown[c_name]['percent_sales']}% of catalog revenue)"
+                            )
+                            t5_df = pd.DataFrame(c_items)
+                            t5_config = {}
+                            if sales_col_used in t5_df.columns:
+                                t5_config[sales_col_used] = st.column_config.NumberColumn(sales_col_used, format="$%.2f")
+                            if hits_col_used in t5_df.columns:
+                                t5_config[hits_col_used] = st.column_config.NumberColumn(hits_col_used, format="%d")
+                            if "Composite Score" in t5_df.columns:
+                                t5_config["Composite Score"] = st.column_config.NumberColumn("Composite Score", format="%.2f")
+                            st.dataframe(t5_df, use_container_width=True, column_config=t5_config, hide_index=True)
+                        else:
+                            st.info(f"No items classified in Class {c_name}.")
 
                 # Distribution Breakdown Table
                 st.subheader("Multicriteria Breakdown & Control Strategy")
