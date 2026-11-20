@@ -1095,7 +1095,7 @@ def calculate_multicriteria_classification(
     item_num_col: Optional[str] = None,
     item_name_col: Optional[str] = None,
     uom_col: Optional[str] = None,
-    method: str = "matrix",
+    method: str = "composite",
     **kwargs: Any,
 ) -> Dict[str, Any]:
     """Perform deterministic multicriteria inventory classification using Sales ($) and Hits.
@@ -1104,6 +1104,12 @@ def calculate_multicriteria_classification(
     and warehouse transaction velocity (Hits / pick lines).
 
     Supported Methods:
+    - 'composite' (Weighted Multi-Criteria Percentile Score - Default):
+        * Composite Score = 0.65 * Percentile_Rank(Sales) + 0.35 * Percentile_Rank(Hits)
+        * Class A: Top 20%
+        * Class B: Next 30% (20%-50%)
+        * Class C: Next 30% (50%-80%)
+        * Class D: Bottom 20% (80%-100%)
     - 'matrix' (Cross-Criteria Matrix):
         * Sales Class (Pareto 80/15/5): A (top 80%), B (next 15%), C (remaining 5%)
         * Hits Class (Pareto 80/15/5): A (top 80%), B (next 15%), C (remaining 5%)
@@ -1112,12 +1118,6 @@ def calculate_multicriteria_classification(
             AC, BB, CA -> Class B (High Value / Moderate Velocity)
             BC, CB     -> Class C (Low Value / Moderate-High Velocity - routine commodities)
             CC         -> Class D (Low Sales & Low Hits - slow-moving tail / dead stock candidates)
-    - 'composite' (Weighted Multi-Criteria Percentile Score):
-        * Composite Score = 50% * Sales Percentile + 50% * Hits Percentile
-        * Class A: Top 20%
-        * Class B: Next 30% (20%-50%)
-        * Class C: Next 30% (50%-80%)
-        * Class D: Bottom 20% (80%-100%)
 
     Returns 8 verification sections:
     1. inputs_extracted
@@ -1128,7 +1128,8 @@ def calculate_multicriteria_classification(
     6. final_answer
     7. verification_checks
     8. assumptions
-    Plus 'classified_df' containing the resulting dataframe with classification columns.
+    Plus 'classified_df' containing the resulting dataframe with classification columns,
+    'top_5_by_class', and class total sales.
     """
     import pandas as pd
 
@@ -1224,10 +1225,13 @@ def calculate_multicriteria_classification(
     else:
         df_classified["Hits Class"] = "C"
 
-    # 3. Percentile Ranks & Composite Score (0 - 100 scale)
+    # 3. Percentile Ranks & Composite Score
+    # Formula: Composite Score = 0.65 * Percentile_Rank(Sales) + 0.35 * Percentile_Rank(Hits)
     sales_rank = df_classified[sales_col].rank(pct=True, ascending=True)
     hits_rank = df_classified[hits_col].rank(pct=True, ascending=True)
-    df_classified["Composite Score"] = ((0.5 * sales_rank + 0.5 * hits_rank) * 100.0).round(2)
+    df_classified["Percentile_Rank_Sales"] = sales_rank.round(4)
+    df_classified["Percentile_Rank_Hits"] = hits_rank.round(4)
+    df_classified["Composite Score"] = (0.65 * sales_rank + 0.35 * hits_rank).round(4)
 
     # 4. Matrix Class Mapping
     def map_matrix_row(row: pd.Series) -> str:
@@ -1320,8 +1324,9 @@ def calculate_multicriteria_classification(
     formulas = [
         "1. Cumulative Sales % = sum(Sales_i) / Total_Sales * 100",
         "2. Cumulative Hits % = sum(Hits_i) / Total_Hits * 100",
-        "3. Composite Score = 0.5 * Percentile_Rank(Sales) + 0.5 * Percentile_Rank(Hits)",
-        "4. Matrix Mapping: AA/AB/BA -> Class A, AC/BB/CA -> Class B, BC/CB -> Class C, CC -> Class D",
+        "3. Composite Score = 0.65 * Percentile_Rank(Sales) + 0.35 * Percentile_Rank(Hits)",
+        "4. Composite Classification Tiers: Class A (Top 20%), Class B (Next 30%), Class C (Next 30%), Class D (Bottom 20%)",
+        "5. Matrix Mapping (Alternative): AA/AB/BA -> Class A, AC/BB/CA -> Class B, BC/CB -> Class C, CC -> Class D",
     ]
 
     formula_with_substituted_values = [

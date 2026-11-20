@@ -270,7 +270,8 @@ def run_streamlit():
                 st.header("🏷️ Multicriteria Inventory Classification (A, B, C, D)")
                 st.markdown(
                     "Classifies catalog items using two critical operational dimensions: "
-                    "**Sales ($)** (financial impact / revenue) and **Hits** (warehouse picking velocity / order frequency)."
+                    "**Sales ($)** (financial impact / revenue) and **Hits** (warehouse picking velocity / order frequency).\n\n"
+                    "**Formula**: `Composite Score = 0.65 * Percentile_Rank(Sales) + 0.35 * Percentile_Rank(Hits)`"
                 )
 
                 # Classification Method Selector
@@ -279,8 +280,8 @@ def run_streamlit():
                     method_selection = st.radio(
                         "Classification Methodology:",
                         options=[
+                            "Composite Score (0.65 × Percentile_Rank(Sales) + 0.35 × Percentile_Rank(Hits))",
                             "Cross-Criteria Matrix (Sales ABC × Hits ABC)",
-                            "Composite Percentile Score (Weighted 50% Sales / 50% Hits)",
                         ],
                         horizontal=True,
                     )
@@ -414,7 +415,7 @@ def run_streamlit():
                 col_config = {
                     sales_col_used: st.column_config.NumberColumn(sales_col_used, format="$%.2f"),
                     hits_col_used: st.column_config.NumberColumn(hits_col_used, format="%d"),
-                    "Composite Score": st.column_config.NumberColumn("Composite Score", format="%.2f"),
+                    "Composite Score": st.column_config.NumberColumn("Composite Score", format="%.4f"),
                     "Classification": st.column_config.TextColumn("Classification (A/B/C/D)"),
                 }
                 st.dataframe(
