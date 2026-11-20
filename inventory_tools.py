@@ -1288,6 +1288,13 @@ def calculate_multicriteria_classification(
             "strategy": strategies[c],
         }
 
+    # Extract Top 5 Items by Sales for each Class (A, B, C, D)
+    top_5_by_class: Dict[str, List[Dict[str, Any]]] = {}
+    cols_order = [c for c in [item_num_col, item_name_col, uom_col, sales_col, hits_col, "Classification", "Composite Score"] if c and c in df_classified.columns]
+    for c in ["A", "B", "C", "D"]:
+        subset = df_classified[df_classified["Classification"] == c].sort_values(by=sales_col, ascending=False).head(5)
+        top_5_by_class[c] = subset[cols_order].to_dict(orient="records")
+
     # Structured 8 Verification Sections
     inputs_extracted = {
         "total_items": total_items,
@@ -1390,6 +1397,7 @@ def calculate_multicriteria_classification(
         "verification_checks": verification_checks,
         "assumptions": assumptions,
         "class_breakdown": class_stats,
+        "top_5_by_class": top_5_by_class,
         "classified_df": df_classified,
         "results": {
             "total_items": total_items,
@@ -1399,6 +1407,10 @@ def calculate_multicriteria_classification(
             "class_B_count": class_stats["B"]["count"],
             "class_C_count": class_stats["C"]["count"],
             "class_D_count": class_stats["D"]["count"],
+            "class_A_sales": class_stats["A"]["total_sales"],
+            "class_B_sales": class_stats["B"]["total_sales"],
+            "class_C_sales": class_stats["C"]["total_sales"],
+            "class_D_sales": class_stats["D"]["total_sales"],
         },
     }
 
